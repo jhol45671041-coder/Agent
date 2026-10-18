@@ -17,16 +17,29 @@ async function api(path, opts = {}) {
 /* ---------------- MCP status ---------------- */
 async function loadStatus() {
   const st = await api("/api/mcp/status");
+  const oauth = await api("/api/oauth/status").catch(() => ({ hasToken: false }));
   const pill = $("#mode-pill");
   if (st.connected) {
     pill.textContent = "● LIVE · MCP"; pill.className = "pill live";
     $("#demo-banner").classList.add("hidden");
     $("#mcp-label").textContent = `${st.serverInfo?.name || "MCP"} · ${st.tools.length} tools`;
+  } else if (st.authRequired) {
+    pill.textContent = "● SIGN-IN NEEDED"; pill.className = "pill auth";
+    $("#demo-banner").classList.remove("hidden");
+    $("#mcp-label").textContent = "TradingView MCP — sign-in required";
   } else {
     pill.textContent = "● DEMO DATA"; pill.className = "pill demo";
     $("#demo-banner").classList.remove("hidden");
     $("#mcp-label").textContent = st.configured ? "MCP configured but not connected" : "MCP not connected";
   }
+  // OAuth row: show when the server asked for sign-in, or we hold a token.
+  const showOauth = Boolean(st.authRequired || oauth.hasToken);
+  $("#oauth-row").classList.toggle("hidden", !showOauth);
+  $("#oauth-signin").classList.toggle("hidden", Boolean(oauth.hasToken && st.connected));
+  $("#oauth-signout").classList.toggle("hidden", !oauth.hasToken);
+  $("#oauth-note").textContent = oauth.hasToken
+    ? `Signed in${oauth.scope ? " · scopes: " + oauth.scope : ""}${oauth.expiresAt ? " · token renews automatically" : ""}.`
+    : "";
   state.tools = st.tools || [];
   const sel = $("#tool-select");
   sel.innerHTML = state.tools.length
@@ -58,7 +71,22 @@ $("#btn-run-tool").addEventListener("click", async () => {
 
 /* ---------------- MCP modal ---------------- */
 const modal = $("#mcp-modal");
-$("#btn-connect").onclick = async () => { modal.classList.remove("hidden"); await loadStatus(); };
+const TV_MCP_URL = "https://mcp.tradingview.com/mcp";
+function fillTvPreset() {
+  $("#mcp-transport").value = "streamable-http";
+  $("#mcp-transport").dispatchEvent(new Event("change"));
+  $("#mcp-url").value = TV_MCP_URL;
+}
+$("#mcp-tv-preset").onclick = fillTvPreset;
+$("#oauth-signout").onclick = async () => {
+  await api("/api/oauth", { method: "DELETE" });
+  await refreshAll();
+};
+$("#btn-connect").onclick = async () => {
+  modal.classList.remove("hidden");
+  if (!$("#mcp-url").value.trim()) fillTvPreset();  // official TradingView MCP by default
+  await loadStatus();
+};
 $("#mcp-close").onclick = () => modal.classList.add("hidden");
 modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.add("hidden"); });
 $("#mcp-transport").addEventListener("change", (e) => {
@@ -83,7 +111,8 @@ $("#mcp-save").onclick = async () => {
         headers,
       }),
     });
-    box.textContent = JSON.stringify({ connected: st.connected, server: st.serverInfo, tools: (st.tools || []).map(t => t.name), error: st.error }, null, 2);
+    box.textContent = JSON.stringify({ connected: st.connected, authRequired: st.authRequired, server: st.serverInfo, tools: (st.tools || []).map(t => t.name), error: st.error }, null, 2)
+      + (st.authRequired ? "\n\n👇 Now click “Sign in with TradingView” below to finish connecting." : "");
     await loadStatus(); await refreshAll();
   } catch (e) { box.textContent = "Error: " + e.message; }
 };

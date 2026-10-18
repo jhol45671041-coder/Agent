@@ -35,6 +35,14 @@ class MCPError(Exception):
     pass
 
 
+class MCPAuthError(MCPError):
+    """Server answered 401 — OAuth sign-in required (carries WWW-Authenticate)."""
+
+    def __init__(self, message: str, www_authenticate: str | None = None):
+        super().__init__(message)
+        self.www_authenticate = www_authenticate
+
+
 # --------------------------------------------------------------------------- #
 # Base JSON-RPC client (transport agnostic)
 # --------------------------------------------------------------------------- #
@@ -57,6 +65,9 @@ class MCPClient:
         self.connected = False
         self.last_error: Optional[str] = None
         self.last_connected_at: Optional[float] = None
+        self.auth_required = False
+        self.www_authenticate: Optional[str] = None
+        self._protocol_version = PROTOCOL_VERSION
 
         # stdio state
         self._proc: Optional[asyncio.subprocess.Process] = None
@@ -103,6 +114,8 @@ class MCPClient:
                 for t in self.tools
             ],
             "error": self.last_error,
+            "authRequired": self.auth_required,
+            "wwwAuthenticate": self.www_authenticate,
             "lastConnectedAt": self.last_connected_at,
             "config": self.public_config(),
         }
@@ -111,6 +124,7 @@ class MCPClient:
     async def connect(self, timeout: float = 20.0) -> dict:
         self.connected = False
         self.last_error = None
+        self.auth_required = False
         self.tools = []
         self.server_info = {}
         if not self.configured:
@@ -130,11 +144,19 @@ class MCPClient:
             )
             if isinstance(init, dict):
                 self.server_info = init.get("serverInfo") or {}
+                if init.get("protocolVersion"):
+                    self._protocol_version = str(init["protocolVersion"])
             await self._notify("notifications/initialized", {}, timeout=timeout)
             listed = await self._request("tools/list", {}, timeout=timeout)
             self.tools = (listed or {}).get("tools", []) if isinstance(listed, dict) else []
             self.connected = True
             self.last_connected_at = time.time()
+        except MCPAuthError as exc:
+            self.auth_required = True
+            self.www_authenticate = exc.www_authenticate
+            self.last_error = ("This MCP server requires OAuth sign-in. Click "
+                               "\"Sign in\" to authorize with your account.")
+            self.connected = False
         except Exception as exc:  # noqa: BLE001 - surface any transport error to UI
             self.last_error = str(exc)
             self.connected = False
@@ -162,7 +184,13 @@ class MCPClient:
             st = await self.connect(timeout=min(timeout, 20))
             if not st["connected"]:
                 raise MCPError(self.last_error or "MCP not connected")
-        result = await self._request("tools/call", {"name": name, "arguments": arguments or {}}, timeout=timeout)
+        try:
+            result = await self._request("tools/call", {"name": name, "arguments": arguments or {}}, timeout=timeout)
+        except MCPAuthError as exc:
+            self.auth_required = True
+            self.www_authenticate = exc.www_authenticate
+            self.connected = False
+            raise MCPError("MCP session needs (re-)authorization — sign in again.") from exc
         return _unwrap_tool_result(result)
 
     # -- JSON-RPC dispatch ------------------------------------------------- #
@@ -194,6 +222,7 @@ class MCPClient:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": self._protocol_version,
             **self.headers,
         }
         if self._session_id:
@@ -203,6 +232,11 @@ class MCPClient:
         sid = resp.headers.get("mcp-session-id") or resp.headers.get("Mcp-Session-Id")
         if sid:
             self._session_id = sid
+        if expect_body and resp.status_code == 401:
+            raise MCPAuthError(
+                f"MCP HTTP 401 (OAuth sign-in required): {resp.text[:200]}",
+                www_authenticate=resp.headers.get("www-authenticate"),
+            )
         if expect_body and resp.status_code >= 400:
             raise MCPError(f"MCP HTTP {resp.status_code}: {resp.text[:400]}")
         return resp
@@ -350,17 +384,57 @@ def _unwrap_tool_result(result: Any) -> Any:
     return result
 
 
-def _find_tool(tools: list[dict], *keywords: str) -> Optional[dict]:
+# Screener columns requested for quotes. Matches the official TradingView
+# MCP's get_symbol_data / get_symbol_data_batch `columns` parameter
+# ("change" is % change and "change_abs" the absolute change there).
+QUOTE_COLUMNS = ["name", "description", "close", "open", "high", "low",
+                 "change", "change_abs", "volume"]
+
+# UI interval -> TradingView-MCP interval enum (1m,5m,15m,30m,1h,2h,4h,1D,1W,1M)
+_INTERVAL_ALIASES = {
+    "1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "1h", "120": "2h",
+    "240": "4h", "D": "1D", "1D": "1D", "W": "1W", "1W": "1W", "M": "1M", "1M": "1M",
+    "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "2h": "2h", "4h": "4h",
+}
+_INTERVAL_NUMERIC = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60",
+                     "2h": "120", "4h": "240", "1D": "D", "1W": "W", "1M": "M"}
+# Tool names of the official TradingView MCP (per tradingview.com/mcp/docs)
+_TV_TOOL_NAMES = {"get_ohlcv", "get_technicals_rating", "get_symbol_data",
+                  "get_symbol_data_batch", "search_symbols"}
+
+
+def _map_interval(interval: str, prop_schema: Any, tool_name: str = "") -> str:
+    mapped = _INTERVAL_ALIASES.get(interval, interval)
+    enum = prop_schema.get("enum") if isinstance(prop_schema, dict) else None
+    if enum:
+        for cand in (mapped, interval, _INTERVAL_NUMERIC.get(mapped), mapped.upper(), mapped.lower()):
+            if cand and cand in enum:
+                return cand
+        if "1D" in enum:
+            return "1D"
+        return (prop_schema.get("default") if isinstance(prop_schema, dict) else None) or enum[0]
+    return mapped if tool_name in _TV_TOOL_NAMES else interval
+
+
+def _find_tool(tools: list[dict], *keywords: str, prefer: tuple = (),
+               exclude: tuple = ("batch",)) -> Optional[dict]:
     best, best_score = None, 0
     for tool in tools:
-        hay = f"{tool.get('name','')} {tool.get('description','')}".lower()
+        name = tool.get("name", "")
+        hay = f"{name} {tool.get('description', '')}".lower()
         score = sum(1 for kw in keywords if kw.lower() in hay)
+        for idx, pref in enumerate(prefer):
+            if name.lower() == pref.lower():
+                score += 100 - idx
+        if any(ex in name.lower() for ex in exclude):
+            score -= 50
         if score > best_score:
             best, best_score = tool, score
-    return best if best_score else None
+    return best if best_score > 0 else None
 
 
-def _build_args(tool: dict, symbol: str, interval: str = "1D", limit: int = 120, query: str = "") -> dict:
+def _build_args(tool: dict, symbol: str, interval: str = "1D", limit: int = 120,
+                query: str = "", symbols: list[str] | None = None) -> dict:
     """Fill a tool's inputSchema with sensible values for a TradingView symbol."""
     schema = (tool.get("inputSchema") or {}).get("properties") or {}
     exchange, _, bare = symbol.partition(":")
@@ -369,16 +443,22 @@ def _build_args(tool: dict, symbol: str, interval: str = "1D", limit: int = 120,
     args: dict[str, Any] = {}
     for key in schema:
         lk = key.lower()
-        if lk in ("symbol", "ticker", "pair", "instrument", "asset"):
+        if lk == "symbols":
+            args[key] = symbols or [symbol]
+        elif lk in ("symbol", "ticker", "pair", "instrument", "asset"):
             # If schema also has exchange, pass bare ticker; else full EXCHANGE:SYMBOL
             has_exchange = any(k.lower() == "exchange" for k in schema)
             args[key] = bare if (has_exchange and exchange) else symbol
         elif lk == "exchange":
             args[key] = exchange or "NASDAQ"
         elif lk in ("interval", "timeframe", "resolution", "period", "time_frame"):
-            args[key] = interval
+            args[key] = _map_interval(interval, schema[key], tool.get("name", ""))
         elif lk in ("limit", "count", "bars", "n", "nbars", "length"):
             args[key] = limit
+        elif lk == "columns":
+            args[key] = QUOTE_COLUMNS
+        elif lk == "summary":
+            args[key] = False  # we want the raw bars, not only aggregates
         elif lk in ("query", "search", "text", "q", "keyword"):
             args[key] = query or bare
     if not args:  # schema-less tools: try the most common convention
@@ -389,28 +469,40 @@ def _build_args(tool: dict, symbol: str, interval: str = "1D", limit: int = 120,
 
 
 async def mcp_quote(client: MCPClient, symbol: str) -> Any:
-    tool = _find_tool(client.tools, "quote", "price", "ticker", "get_symbol", "snapshot")
+    tool = _find_tool(client.tools, "quote", "price", "ticker", "get_symbol", "snapshot",
+                      prefer=("get_symbol_data", "get_quote", "get_ticker"))
     if not tool:
         raise MCPError("No quote/price tool found on MCP server")
     return await client.call_tool(tool["name"], _build_args(tool, symbol))
 
 
+async def mcp_quotes_batch(client: MCPClient, symbols: list[str]) -> Any:
+    """One batch call for many quotes (TradingView: get_symbol_data_batch)."""
+    tool = _find_tool(client.tools, "batch", prefer=("get_symbol_data_batch",), exclude=())
+    if not tool:
+        raise MCPError("No batch quote tool found on MCP server")
+    return await client.call_tool(tool["name"], _build_args(tool, symbols[0], symbols=symbols))
+
+
 async def mcp_candles(client: MCPClient, symbol: str, interval: str, limit: int) -> Any:
-    tool = _find_tool(client.tools, "candle", "ohlcv", "history", "historical", "bars", "chart_data", "kline")
+    tool = _find_tool(client.tools, "candle", "ohlcv", "history", "historical", "bars", "chart_data", "kline",
+                      prefer=("get_ohlcv", "get_historical_data", "get_candles"))
     if not tool:
         raise MCPError("No candles/history tool found on MCP server")
     return await client.call_tool(tool["name"], _build_args(tool, symbol, interval, limit))
 
 
 async def mcp_technicals(client: MCPClient, symbol: str, interval: str) -> Any:
-    tool = _find_tool(client.tools, "technical", "analysis", "indicator", "recommendation", "rsi", "summary")
+    tool = _find_tool(client.tools, "technical", "analysis", "indicator", "recommendation", "rsi", "summary",
+                      prefer=("get_technicals_rating", "get_technical_analysis", "get_technicals"))
     if not tool:
         raise MCPError("No technical-analysis tool found on MCP server")
     return await client.call_tool(tool["name"], _build_args(tool, symbol, interval))
 
 
 async def mcp_search(client: MCPClient, query: str) -> Any:
-    tool = _find_tool(client.tools, "search", "lookup", "find_symbol", "screener")
+    tool = _find_tool(client.tools, "search", "lookup", "find_symbol", "screener",
+                      prefer=("search_symbols", "search_symbol"))
     if not tool:
         raise MCPError("No search tool found on MCP server")
     return await client.call_tool(tool["name"], _build_args(tool, query, query=query))

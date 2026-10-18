@@ -12,6 +12,7 @@ header{display:flex;justify-content:space-between;align-items:center;padding:12p
 .pill{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.04em}
 .pill.demo{background:#3a2c12;color:#ffb84d;border:1px solid #6b511d}
 .pill.live{background:#0f2f22;color:var(--green);border:1px solid #1d5c40}
+.pill.auth{background:#12233f;color:#6db3ff;border:1px solid #274b7a}
 .btn{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:14px}
 .btn:hover{border-color:var(--accent)}
 .btn.primary{background:linear-gradient(90deg,var(--accent),var(--accent2));border:none;color:#fff;font-weight:600}

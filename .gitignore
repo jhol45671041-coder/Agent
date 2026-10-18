@@ -3,6 +3,9 @@ __pycache__/
 .env
 data/store.json
 data/mcp_config.json
+data/oauth_tokens.json
+data/oauth_pending.json
+data/oauth_client.json
 data/*.tmp
 data/*.log
 .venv/

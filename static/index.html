@@ -19,7 +19,8 @@
 
 <div id="demo-banner" class="banner">
   Showing <b>demo data</b> so you can explore the tracker. Click
-  <b>“Connect TradingView MCP”</b> and paste your MCP server URL or command to switch to live data.
+  <b>“Connect TradingView MCP”</b> → the official <b>mcp.tradingview.com</b> URL is pre-filled →
+  <b>Test &amp; Connect</b> → <b>Sign in with TradingView</b> (Essential plan or above) to switch to live data.
   <span class="muted">Not financial advice.</span>
 </div>
 
@@ -141,6 +142,8 @@
   <div class="modal-card">
     <div class="row between"><h2>🔌 Connect TradingView MCP</h2><button class="btn ghost" id="mcp-close">✕</button></div>
     <p class="muted small">Paste what you have — the tracker speaks standard MCP (JSON-RPC) and auto-discovers the server's tools. Or just share the link/details with the assistant in chat and it will be wired in for you.</p>
+    <button id="mcp-tv-preset" type="button" class="btn small" style="width:100%">⭐ Use official TradingView MCP — https://mcp.tradingview.com/mcp</button>
+    <p class="muted small" style="margin:6px 0 0">The official TradingView MCP uses <b>OAuth sign-in</b> (no API key) and needs a <b>TradingView Essential</b> plan or above. After “Test &amp; Connect”, a <b>Sign in with TradingView</b> button appears below.</p>
     <label>Transport
       <select id="mcp-transport">
         <option value="streamable-http">Streamable HTTP (URL, e.g. http://localhost:3000/mcp)</option>
@@ -163,6 +166,15 @@
     <div class="row gap">
       <button id="mcp-save" class="btn primary">Test &amp; Connect</button>
       <button id="mcp-disconnect" class="btn ghost danger">Disconnect / clear</button>
+    </div>
+    <div id="oauth-row" class="hidden" style="margin-top:12px;border:1px solid #274b7a;background:#0e1a2e;border-radius:10px;padding:12px">
+      <b>🔐 This MCP server requires sign-in.</b>
+      <p class="muted small" style="margin:6px 0 10px">You'll be sent to <b>tradingview.com</b> to sign in and approve access — your password never touches this app. Requires a TradingView Essential+ plan.</p>
+      <div class="row gap">
+        <a id="oauth-signin" class="btn primary" href="/api/oauth/start" style="text-decoration:none">Sign in with TradingView</a>
+        <button id="oauth-signout" class="btn ghost danger hidden">Sign out</button>
+      </div>
+      <p class="muted small" id="oauth-note"></p>
     </div>
     <pre id="mcp-status-box" class="codebox">Not connected.</pre>
     <details><summary class="muted small">What formats are accepted?</summary>
