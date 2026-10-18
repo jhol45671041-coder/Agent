@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+data/store.json
+data/mcp_config.json
+data/*.tmp
+.venv/
+node_modules/

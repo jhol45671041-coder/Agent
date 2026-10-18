@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Tracker — TradingView MCP</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">📈 <span>Trading<strong>Tracker</strong></span></div>
+  <div class="header-actions">
+    <span id="mode-pill" class="pill demo">● DEMO DATA</span>
+    <span id="mcp-label" class="muted small"></span>
+    <button id="btn-refresh" class="btn ghost">↻ Refresh</button>
+    <button id="btn-connect" class="btn primary">🔌 Connect TradingView MCP</button>
+  </div>
+</header>
+
+<div id="demo-banner" class="banner">
+  Showing <b>demo data</b> so you can explore the tracker. Click
+  <b>“Connect TradingView MCP”</b> and paste your MCP server URL or command to switch to live data.
+  <span class="muted">Not financial advice.</span>
+</div>
+
+<main>
+  <!-- Watchlist ------------------------------------------------------------>
+  <aside class="panel" id="watchlist-panel">
+    <h2>Watchlist</h2>
+    <div class="searchbox">
+      <input id="search-input" type="text" placeholder="Search symbol… e.g. BTC, AAPL, EURUSD" autocomplete="off">
+      <div id="search-results" class="search-results hidden"></div>
+    </div>
+    <form id="add-symbol-form" class="inline-form">
+      <input id="add-symbol-input" type="text" placeholder="Add e.g. NASDAQ:NVDA" autocomplete="off">
+      <button class="btn small" type="submit">＋ Add</button>
+    </form>
+    <div id="watchlist" class="watchlist"></div>
+
+    <h2 class="mt">Portfolio summary</h2>
+    <div class="stat-grid">
+      <div class="stat"><span>Open P&amp;L</span><b id="stat-open-pnl">—</b></div>
+      <div class="stat"><span>Positions value</span><b id="stat-pos-value">—</b></div>
+      <div class="stat"><span>Closed P&amp;L</span><b id="stat-closed-pnl">—</b></div>
+      <div class="stat"><span>Win rate</span><b id="stat-winrate">—</b></div>
+    </div>
+  </aside>
+
+  <!-- Chart + detail ------------------------------------------------------->
+  <section class="panel" id="detail-panel">
+    <div class="detail-head">
+      <div>
+        <h1 id="d-symbol">—</h1>
+        <div class="price-line"><span id="d-price">—</span> <span id="d-change">—</span></div>
+        <div class="muted small" id="d-source"></div>
+      </div>
+      <div class="ohlc muted" id="d-ohlc"></div>
+    </div>
+
+    <div class="row gap">
+      <div class="seg" id="interval-seg">
+        <button data-interval="15">15m</button><button data-interval="60">1H</button>
+        <button data-interval="240">4H</button><button data-interval="1D" class="active">1D</button>
+        <button data-interval="1W">1W</button>
+      </div>
+      <div class="seg" id="chart-seg">
+        <button data-chart="tracker" class="active">Tracker chart</button>
+        <button data-chart="tv">TradingView widget</button>
+      </div>
+    </div>
+
+    <canvas id="chart" height="340"></canvas>
+    <div id="tv-widget" class="hidden"></div>
+
+    <div class="row tech-row">
+      <div class="gauge-box">
+        <div class="muted small">Technical rating</div>
+        <div id="gauge" class="gauge"><div id="gauge-needle"></div></div>
+        <div class="gauge-labels"><span>Strong Sell</span><span>Neutral</span><span>Strong Buy</span></div>
+        <b id="tech-rec">—</b>
+      </div>
+      <table class="mini-table" id="indicators"></table>
+    </div>
+  </section>
+
+  <!-- Positions + journal --------------------------------------------------->
+  <section class="panel wide" id="portfolio-panel">
+    <div class="tabs">
+      <button class="tab active" data-tab="positions">Open Positions</button>
+      <button class="tab" data-tab="journal">Trade Journal</button>
+      <button class="tab" data-tab="tools">MCP Tool Explorer</button>
+    </div>
+
+    <div id="tab-positions">
+      <form id="position-form" class="inline-form wrap">
+        <input name="symbol" placeholder="Symbol e.g. NASDAQ:AAPL" required>
+        <select name="side"><option value="long">Long</option><option value="short">Short</option></select>
+        <input name="quantity" type="number" step="any" min="0" placeholder="Qty" required>
+        <input name="entryPrice" type="number" step="any" min="0" placeholder="Entry price" required>
+        <input name="note" placeholder="Note (optional)">
+        <button class="btn small primary" type="submit">Add position</button>
+      </form>
+      <table class="table"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Now</th><th>Value</th><th>P&amp;L</th><th></th></tr></thead>
+      <tbody id="positions-body"></tbody></table>
+      <p class="muted small" id="positions-empty">No open positions yet. Add your first one above — P&amp;L updates from live (or demo) prices.</p>
+    </div>
+
+    <div id="tab-journal" class="hidden">
+      <form id="trade-form" class="inline-form wrap">
+        <input name="symbol" placeholder="Symbol" required>
+        <select name="side"><option value="long">Long</option><option value="short">Short</option></select>
+        <input name="quantity" type="number" step="any" min="0" placeholder="Qty" required>
+        <input name="entryPrice" type="number" step="any" min="0" placeholder="Entry" required>
+        <input name="exitPrice" type="number" step="any" min="0" placeholder="Exit" required>
+        <input name="strategy" placeholder="Strategy">
+        <input name="note" placeholder="Note / lesson">
+        <button class="btn small primary" type="submit">Log trade</button>
+      </form>
+      <table class="table"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Strategy</th><th></th></tr></thead>
+      <tbody id="trades-body"></tbody></table>
+      <p class="muted small" id="trades-empty">No closed trades logged yet.</p>
+    </div>
+
+    <div id="tab-tools" class="hidden">
+      <p class="muted small">Tools discovered from your TradingView MCP server. Pick one, edit the JSON arguments, and run it — handy for checking exactly what your MCP returns.</p>
+      <div class="row gap wrap">
+        <select id="tool-select" style="min-width:240px"></select>
+        <button id="btn-run-tool" class="btn small primary">▶ Run tool</button>
+      </div>
+      <div class="muted small" id="tool-desc"></div>
+      <textarea id="tool-args" rows="5" spellcheck="false">{"symbol": "NASDAQ:AAPL"}</textarea>
+      <pre id="tool-result" class="codebox">Connect an MCP server to explore its tools.</pre>
+    </div>
+  </section>
+</main>
+
+<footer class="muted small">Trading Tracker · Data source: your TradingView MCP (or demo fallback) · For tracking/education only — not financial advice.</footer>
+
+<!-- MCP connection modal ---------------------------------------------------->
+<div id="mcp-modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="row between"><h2>🔌 Connect TradingView MCP</h2><button class="btn ghost" id="mcp-close">✕</button></div>
+    <p class="muted small">Paste what you have — the tracker speaks standard MCP (JSON-RPC) and auto-discovers the server's tools. Or just share the link/details with the assistant in chat and it will be wired in for you.</p>
+    <label>Transport
+      <select id="mcp-transport">
+        <option value="streamable-http">Streamable HTTP (URL, e.g. http://localhost:3000/mcp)</option>
+        <option value="sse">SSE (legacy URL, e.g. http://localhost:3000/sse)</option>
+        <option value="stdio">stdio (local command, e.g. npx -y tradingview-mcp)</option>
+      </select>
+    </label>
+    <label id="mcp-url-row">MCP server URL
+      <input id="mcp-url" type="text" placeholder="http://localhost:3000/mcp">
+    </label>
+    <label id="mcp-cmd-row" class="hidden">Command
+      <input id="mcp-command" type="text" placeholder="npx">
+    </label>
+    <label id="mcp-args-row" class="hidden">Arguments (space separated)
+      <input id="mcp-args" type="text" placeholder="-y your-tradingview-mcp-package">
+    </label>
+    <label>Headers JSON (optional — e.g. API key)
+      <textarea id="mcp-headers" rows="2" spellcheck="false" placeholder='{"Authorization": "Bearer YOUR_KEY"}'></textarea>
+    </label>
+    <div class="row gap">
+      <button id="mcp-save" class="btn primary">Test &amp; Connect</button>
+      <button id="mcp-disconnect" class="btn ghost danger">Disconnect / clear</button>
+    </div>
+    <pre id="mcp-status-box" class="codebox">Not connected.</pre>
+    <details><summary class="muted small">What formats are accepted?</summary>
+      <p class="muted small">
+        • A hosted/remote MCP URL (<code>https://…/mcp</code> or <code>/sse</code>)<br>
+        • A local stdio command (<code>npx -y …</code>, <code>python server.py</code>, <code>node server.js</code>)<br>
+        • A GitHub repo link — paste it in the chat instead, and the assistant will install &amp; wire it up.<br>
+        You can also set <code>TRADINGVIEW_MCP_URL</code> / <code>TRADINGVIEW_MCP_COMMAND</code> environment variables (see <code>.env.example</code>).
+      </p>
+    </details>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
