@@ -4,5 +4,6 @@ __pycache__/
 data/store.json
 data/mcp_config.json
 data/*.tmp
+data/*.log
 .venv/
 node_modules/
